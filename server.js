@@ -1,19 +1,21 @@
 /**************
  SYSTEM INCLUDES
 **************/
-var	http = require('http');
+var http = require('http');
 var sys = require('sys');
-var	async = require('async');
+var async = require('async');
 var sanitizer = require('sanitizer');
 var compression = require('compression');
 var express = require('express');
 var conf = require('./config.js').server;
 var ga = require('./config.js').googleanalytics;
+var redisConfig = require('./config.js').redis;
+
 
 /**************
  LOCAL INCLUDES
 **************/
-var	data	= require('./lib/data.js').db;
+var data = require('./lib/data.js').db;
 
 /**************
  GLOBALS
@@ -49,12 +51,15 @@ var io = require('socket.io')(server, {
 	path: conf.baseurl == '/' ? '' : conf.baseurl + "/socket.io"
 });
 
+const redis = require('socket.io-redis');
+io.adapter(redis({ host: redisConfig.host, port: redisConfig.port }));
+
 const defaultNamespace = io.of('/');
 
 /**************
  ROUTES
 **************/
-router.get('/', function(req, res) {
+router.get('/', function (req, res) {
 	//console.log(req.header('host'));
 	url = req.header('host') + req.baseUrl;
 
@@ -68,23 +73,23 @@ router.get('/', function(req, res) {
 });
 
 
-router.get('/demo', function(req, res) {
+router.get('/demo', function (req, res) {
 	res.render('index.jade', {
 		pageTitle: 'scrumblr - demo',
 		demo: true
 	});
 });
 
-router.get('/:id', function(req, res){
+router.get('/:id', function (req, res) {
 	res.render('index.jade', {
 		pageTitle: ('scrumblr - ' + req.params.id)
 	});
 });
 
-app.post('/:id/card', async function(req, res) {
+app.post('/:id/card', async function (req, res) {
 	const clean_data = req.body
 	const room = `/${req.params.id}`
-	
+
 	createCard(room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
 
 	message_out = {
@@ -93,7 +98,7 @@ app.post('/:id/card', async function(req, res) {
 	};
 
 	io.to(room).send(message_out)
-	res.send(200, {status: 'ok'})
+	res.send(200, { status: 'ok' })
 })
 
 
@@ -102,39 +107,35 @@ app.post('/:id/card', async function(req, res) {
 **************/
 defaultNamespace.on('connection', function (client) {
 	//santizes text
-	function scrub( text ) {
-		if (typeof text != "undefined" && text !== null)
-		{
+	function scrub(text) {
+		if (typeof text != "undefined" && text !== null) {
 			//clip the string if it is too long
-			if (text.length > 65535)
-			{
-				text = text.substr(0,65535);
+			if (text.length > 65535) {
+				text = text.substr(0, 65535);
 			}
 			return sanitizer.sanitize(text);
 		}
-		else
-		{
+		else {
 			return null;
 		}
 	}
 
-	client.on('message', function( message ){
+	client.on('message', function (message) {
 		var clean_data = {};
 		var clean_message = {};
 		var message_out = {};
 
-		if (!message.action)	return;
+		if (!message.action) return;
 
 		const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
-		switch (message.action)
-		{
+		switch (message.action) {
 			case 'initializeMe':
 				initClient(client);
 				break;
 
 			case 'joinRoom':
 				client.join(message.data, (err) => {
-					client.json.send( { action: 'roomAccept', data: '' } );
+					client.json.send({ action: 'roomAccept', data: '' });
 				})
 				break;
 
@@ -152,7 +153,7 @@ defaultNamespace.on('connection', function (client) {
 				};
 
 				client.to(room).send(message_out)
-				db.cardSetXY( room , message.data.id, message.data.position.left, message.data.position.top);
+				db.cardSetXY(room, message.data.id, message.data.position.left, message.data.position.top);
 				break;
 
 			case 'createCard':
@@ -164,7 +165,7 @@ defaultNamespace.on('connection', function (client) {
 				clean_data.y = scrub(data.y);
 				clean_data.rot = scrub(data.rot);
 				clean_data.colour = scrub(data.colour);
-				createCard( room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
+				createCard(room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
 				message_out = {
 					action: 'createCard',
 					data: clean_data
@@ -177,7 +178,7 @@ defaultNamespace.on('connection', function (client) {
 				clean_data = {};
 				clean_data.value = scrub(message.data.value);
 				clean_data.id = scrub(message.data.id);
-				db.cardEdit( room , clean_data.id, clean_data.value );
+				db.cardEdit(room, clean_data.id, clean_data.value);
 				message_out = {
 					action: 'editCard',
 					data: clean_data
@@ -191,13 +192,13 @@ defaultNamespace.on('connection', function (client) {
 					action: 'deleteCard',
 					data: { id: scrub(message.data.id) }
 				};
-				db.deleteCard ( room, clean_message.data.id );
+				db.deleteCard(room, clean_message.data.id);
 				client.to(room).send(clean_message)
 				break;
 
 			case 'createColumn':
 				clean_message = { data: scrub(message.data) };
-				db.createColumn( room, clean_message.data, function() {} );
+				db.createColumn(room, clean_message.data, function () { });
 				client.to(room).send(message_out)
 				break;
 
@@ -211,18 +212,17 @@ defaultNamespace.on('connection', function (client) {
 				if (!(columns instanceof Array))
 					break;
 				var clean_columns = [];
-				for (var i in columns)
-				{
-					clean_columns[i] = scrub( columns[i] );
+				for (var i in columns) {
+					clean_columns[i] = scrub(columns[i]);
 				}
-				db.setColumns( room, clean_columns );
-				client.to(room).send( { action: 'updateColumns', data: clean_columns })
+				db.setColumns(room, clean_columns);
+				client.to(room).send({ action: 'updateColumns', data: clean_columns })
 				break;
 
 			case 'changeTheme':
 				clean_message = {};
 				clean_message.data = scrub(message.data);
-				db.setTheme( room, clean_message.data );
+				db.setTheme(room, clean_message.data);
 				clean_message.action = 'changeTheme';
 				client.to(room).send(clean_message)
 				break;
@@ -241,16 +241,16 @@ defaultNamespace.on('connection', function (client) {
 			case 'addSticker':
 				var cardId = scrub(message.data.cardId);
 				var stickerId = scrub(message.data.stickerId);
-				db.addSticker( room , cardId, stickerId );
-				client.to(room).send({ action: 'addSticker', data: { cardId: cardId, stickerId: stickerId }});
+				db.addSticker(room, cardId, stickerId);
+				client.to(room).send({ action: 'addSticker', data: { cardId: cardId, stickerId: stickerId } });
 				break;
 
 			case 'setBoardSize':
 				var size = {};
 				size.width = scrub(message.data.width);
 				size.height = scrub(message.data.height);
-				db.setBoardSize( room, size );
-				client.to(room).send({ action: 'setBoardSize', data: size } );
+				db.setBoardSize(room, size);
+				client.to(room).send({ action: 'setBoardSize', data: size });
 				break;
 
 			default:
@@ -259,67 +259,65 @@ defaultNamespace.on('connection', function (client) {
 		}
 	});
 
-	client.on('disconnect', function() {
-			leaveRoom(client);
+	client.on('disconnect', function () {
+		leaveRoom(client);
 	});
-  //tell all others that someone has connected
-  //client.broadcast('someone has connected');
+	//tell all others that someone has connected
+	//client.broadcast('someone has connected');
 });
 
 
 /**************
  FUNCTIONS
 **************/
-function initClient ( client )
-{
+function initClient(client) {
 	//console.log ('initClient Started');
 	const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
-		db.getAllCards( room , function (cards) {
-			client.json.send(
-				{
-					action: 'initCards',
-					data: cards
-				}
-			);
-
-		});
-
-		db.getAllColumns ( room, function (columns) {
-			client.json.send(
-				{
-					action: 'initColumns',
-					data: columns
-				}
-			);
-		});
-
-		db.getTheme( room, function(theme) {
-			if (theme === null) theme = 'bigcards';
-
-			client.json.send(
-				{
-					action: 'changeTheme',
-					data: theme
-				}
-			);
-		});
-
-		db.getBoardSize( room, function(size) {
-			if (size !== null) {
-				client.json.send(
-					{
-						action: 'setBoardSize',
-						data: size
-					}
-				);
+	db.getAllCards(room, function (cards) {
+		client.json.send(
+			{
+				action: 'initCards',
+				data: cards
 			}
-		});
-		// send all users in a room to the client
+		);
+
+	});
+
+	db.getAllColumns(room, function (columns) {
+		client.json.send(
+			{
+				action: 'initColumns',
+				data: columns
+			}
+		);
+	});
+
+	db.getTheme(room, function (theme) {
+		if (theme === null) theme = 'bigcards';
+
+		client.json.send(
+			{
+				action: 'changeTheme',
+				data: theme
+			}
+		);
+	});
+
+	db.getBoardSize(room, function (size) {
+		if (size !== null) {
+			client.json.send(
+				{
+					action: 'setBoardSize',
+					data: size
+				}
+			);
+		}
+	});
+	// send all users in a room to the client
 }
 
 
-function joinRoom (client, room, successFunction)
-{
+function joinRoom(client, room, successFunction) {
 	var msg = {};
 	msg.action = 'join-announce';
 	msg.data = { sid: client.id, user_name: client.user_name };
@@ -327,8 +325,7 @@ function joinRoom (client, room, successFunction)
 	successFunction();
 }
 
-function leaveRoom (client)
-{
+function leaveRoom(client) {
 	var msg = {};
 	msg.action = 'leave-announce';
 	msg.data = { sid: client.id };
@@ -338,7 +335,7 @@ function leaveRoom (client)
 }
 
 //----------------CARD FUNCTIONS
-function createCard( room, id, text, x, y, rot, colour ) {
+function createCard(room, id, text, x, y, rot, colour) {
 	var card = {
 		id: id,
 		colour: colour,
@@ -352,29 +349,26 @@ function createCard( room, id, text, x, y, rot, colour ) {
 	db.createCard(room, id, card);
 }
 
-function roundRand( max )
-{
+function roundRand(max) {
 	return Math.floor(Math.random() * max);
 }
 
 
-function setUserName ( client, name )
-{
+function setUserName(client, name) {
 	client.user_name = name;
 	sids_to_user_names[client.id] = name;
 	//console.log('sids to user names: ');
 	console.dir(sids_to_user_names);
 }
 
-function cleanAndInitializeDemoRoom()
-{
+function cleanAndInitializeDemoRoom() {
 	// DUMMY DATA
-	db.clearRoom('/demo', function() {
-		db.createColumn( '/demo', 'Not Started' );
-		db.createColumn( '/demo', 'Started' );
-		db.createColumn( '/demo', 'Testing' );
-		db.createColumn( '/demo', 'Review' );
-		db.createColumn( '/demo', 'Complete' );
+	db.clearRoom('/demo', function () {
+		db.createColumn('/demo', 'Not Started');
+		db.createColumn('/demo', 'Started');
+		db.createColumn('/demo', 'Testing');
+		db.createColumn('/demo', 'Review');
+		db.createColumn('/demo', 'Complete');
 
 
 		createCard('/demo', 'card1', 'Hello this is fun', roundRand(600), roundRand(300), Math.random() * 10 - 5, 'yellow');
@@ -394,6 +388,6 @@ function cleanAndInitializeDemoRoom()
  SETUP DATABASE ON FIRST RUN
 **************/
 // (runs only once on startup)
-var db = new data(function() {
+var db = new data(function () {
 	cleanAndInitializeDemoRoom();
 });

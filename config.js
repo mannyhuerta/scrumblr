@@ -26,3 +26,7 @@ exports.database = {
 	redis: argv.redis || 'redis://192.168.1.208:6379'
 };
 
+exports.redis = {
+	host: argv.redis.match(/\/\/(.+):/)[1],
+	port: argv.redis.match(/:(\d+)/)[1]
+}	
