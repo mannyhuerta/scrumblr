@@ -1,27 +1,19 @@
 /**************
  SYSTEM INCLUDES
 **************/
-var http = require('http');
-var sys = require('sys');
-var async = require('async');
 var sanitizer = require('sanitizer');
 var compression = require('compression');
 var express = require('express');
 var conf = require('./config.js').server;
 var ga = require('./config.js').googleanalytics;
 var redisConfig = require('./config.js').redis;
-
+const redis = require('redis')
+const bluebird = require('bluebird')
 
 /**************
  LOCAL INCLUDES
 **************/
 var data = require('./lib/data.js').db;
-
-/**************
- GLOBALS
-**************/
-//Map of sids to user_names
-var sids_to_user_names = [];
 
 /**************
  SETUP EXPRESS
@@ -51,10 +43,37 @@ var io = require('socket.io')(server, {
 	path: conf.baseurl == '/' ? '' : conf.baseurl + "/socket.io"
 });
 
-const redis = require('socket.io-redis');
-io.adapter(redis({ host: redisConfig.host, port: redisConfig.port }));
+const ioredis = require('socket.io-redis');
+io.adapter(ioredis({ host: redisConfig.host, port: redisConfig.port }));
 
 const defaultNamespace = io.of('/');
+
+/**************
+ SETUP Redis
+**************/
+const cache = redis.createClient({
+	host: redisConfig.host,
+	port: redisConfig.port,
+	retry_strategy: function (options) {
+		if (options.error && options.error.code === 'ECONNREFUSED') {
+			// End reconnecting on a specific error and flush all commands with a individual error
+			return 10000
+		}
+		if (options.total_retry_time > 1000 * 60 * 60) {
+			// End reconnecting after a specific timeout and flush all commands with a individual error
+			return new Error('Retry time exhausted')
+		}
+		if (options.attempt > 20) {
+			// End reconnecting with built in error
+			return undefined
+		}
+		// reconnect after
+		return Math.min(options.attempt * 100, 3000)
+	}
+})
+
+bluebird.promisifyAll(redis.RedisClient.prototype);
+bluebird.promisifyAll(redis.Multi.prototype);
 
 /**************
  ROUTES
@@ -136,6 +155,10 @@ defaultNamespace.on('connection', function (client) {
 			case 'joinRoom':
 				client.join(message.data, (err) => {
 					client.json.send({ action: 'roomAccept', data: '' });
+					var msg = {};
+					msg.action = 'join-announce';
+					msg.data = { sid: client.id, user_name: client.user_name };
+					client.to(message.data).emit('message', msg)
 				})
 				break;
 
@@ -270,7 +293,15 @@ defaultNamespace.on('connection', function (client) {
 /**************
  FUNCTIONS
 **************/
-function initClient(client) {
+const getUserName = async (sid) => {
+	const user_name = await cache.getAsync(`user_name_${sid}`).then((res) => {
+		return res ? res : sid
+	});
+
+	return user_name
+}
+
+async function initClient(client) {
 	//console.log ('initClient Started');
 	const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
 	db.getAllCards(room, function (cards) {
@@ -313,25 +344,33 @@ function initClient(client) {
 			);
 		}
 	});
-	// send all users in a room to the client
+
+	var roommates = await Object.keys(io.sockets.adapter.rooms[room].sockets).map(async (sid) => {
+		if (client.id !== sid)
+			return await getUserName(sid).then((res) => {
+				return { sid: sid, user_name: res }
+			})
+
+	}).filter(function (n) { return n != null });
+
+	Promise.all(roommates).then((res) => {
+		client.json.send(
+			{
+				action: 'initialUsers',
+				data: res
+			}
+		);
+	})
 }
 
-
-function joinRoom(client, room, successFunction) {
-	var msg = {};
-	msg.action = 'join-announce';
-	msg.data = { sid: client.id, user_name: client.user_name };
-	rooms.add_to_room_and_announce(client, room, msg);
-	successFunction();
-}
 
 function leaveRoom(client) {
+	const referer = client.request.headers.referer.split('/')
+	const room = `/${referer[referer.length - 1]}`
 	var msg = {};
 	msg.action = 'leave-announce';
 	msg.data = { sid: client.id };
-	// TODO - implement leaving a room - rooms.remove_from_all_rooms_and_announce(client, msg);
-
-	delete sids_to_user_names[client.id];
+	client.to(room).emit('message', msg)
 }
 
 //----------------CARD FUNCTIONS
@@ -356,9 +395,7 @@ function roundRand(max) {
 
 function setUserName(client, name) {
 	client.user_name = name;
-	sids_to_user_names[client.id] = name;
-	//console.log('sids to user names: ');
-	console.dir(sids_to_user_names);
+	cache.setex(`user_name_${client.id}`, 38400, name)
 }
 
 function cleanAndInitializeDemoRoom() {
