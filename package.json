@@ -10,6 +10,9 @@
   "directories": {
     "lib": "lib/"
   },
+  "scripts": {
+    "build:ui": "cd react-ui && npm run build"
+  },
   "engines": {
     "node": "0.4.7"
   },
@@ -22,7 +25,7 @@
     "redis": "^2.8.0",
     "sanitizer": "~0.1.1",
     "simplesets": "~1.2.0",
-    "socket.io": "^2.1.0",
+    "socket.io": "^2.1.1",
     "socket.io-redis": "^5.2.0",
     "yargs": "~2.3.0"
   }

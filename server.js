@@ -9,6 +9,8 @@ var ga = require('./config.js').googleanalytics;
 var redisConfig = require('./config.js').redis;
 const redis = require('redis')
 const bluebird = require('bluebird')
+const path = require('path');
+const fs = require('fs')
 
 /**************
  LOCAL INCLUDES
@@ -29,12 +31,38 @@ app.use(bodyParser.json());
 app.locals.ga = ga.enabled;
 app.locals.gaAccount = ga.account;
 
-router.use(express.static(__dirname + '/client'));
-
 var server = require('http').Server(app);
 server.listen(conf.port);
 
 console.log('Server running at http://127.0.0.1:' + conf.port + '/');
+
+
+/**************
+ SETUP Redis
+**************/
+
+const retry_strategy = function (options) {
+	if (options.error && (options.error.code === 'ECONNREFUSED' || options.error.code === 'ENOTFOUND')) {
+		// End reconnecting on a specific error and flush all commands with a individual error
+		return 10000
+	}
+	if (options.total_retry_time > 1000 * 60 * 60) {
+		// End reconnecting after a specific timeout and flush all commands with a individual error
+		return new Error('Retry time exhausted')
+	}
+	if (options.attempt > 20) {
+		// End reconnecting with built in error
+		return undefined
+	}
+	// reconnect after
+	return Math.min(options.attempt * 100, 3000)
+}
+
+const cache = redis.createClient({
+	host: redisConfig.host,
+	port: redisConfig.port,
+	retry_strategy
+})
 
 /**************
  SETUP Socket.IO
@@ -42,67 +70,39 @@ console.log('Server running at http://127.0.0.1:' + conf.port + '/');
 var io = require('socket.io')(server, {
 	path: conf.baseurl == '/' ? '' : conf.baseurl + "/socket.io"
 });
-
-const ioredis = require('socket.io-redis');
-io.adapter(ioredis({ host: redisConfig.host, port: redisConfig.port }));
-
 const defaultNamespace = io.of('/');
-
-/**************
- SETUP Redis
-**************/
-const cache = redis.createClient({
-	host: redisConfig.host,
-	port: redisConfig.port,
-	retry_strategy: function (options) {
-		if (options.error && options.error.code === 'ECONNREFUSED') {
-			// End reconnecting on a specific error and flush all commands with a individual error
-			return 10000
-		}
-		if (options.total_retry_time > 1000 * 60 * 60) {
-			// End reconnecting after a specific timeout and flush all commands with a individual error
-			return new Error('Retry time exhausted')
-		}
-		if (options.attempt > 20) {
-			// End reconnecting with built in error
-			return undefined
-		}
-		// reconnect after
-		return Math.min(options.attempt * 100, 3000)
-	}
-})
-
 bluebird.promisifyAll(redis.RedisClient.prototype);
 bluebird.promisifyAll(redis.Multi.prototype);
 
 /**************
+ SETUP Socket.IO Redis Adapter
+**************/
+const ioredis = require('socket.io-redis');
+io.adapter(ioredis({ host: redisConfig.host, port: redisConfig.port }));
+
+/**************
  ROUTES
 **************/
-router.get('/', function (req, res) {
-	//console.log(req.header('host'));
-	url = req.header('host') + req.baseUrl;
+// router.get('/', function (req, res) {
+// 	//console.log(req.header('host'));
+// 	url = req.header('host') + req.baseUrl;
 
-	var connected = io.sockets.connected;
-	clientsCount = Object.keys(connected).length;
+// 	var connected = io.sockets.connected;
+// 	clientsCount = Object.keys(connected).length;
+//    res.send()
+// });
 
-	res.render('home.jade', {
-		url: url,
-		connected: clientsCount
-	});
-});
+const uiPath = path.join(__dirname, 'react-ui/build')
+const uiIndexPage = `${uiPath}/index.html`
+if (!fs.existsSync(uiIndexPage)) {
+	console.log('Please build the React UI using yarn run build:ui or npm run build:ui')
+	process.exit(1)
+}
 
-
-router.get('/demo', function (req, res) {
-	res.render('index.jade', {
-		pageTitle: 'scrumblr - demo',
-		demo: true
-	});
-});
-
-router.get('/:id', function (req, res) {
-	res.render('index.jade', {
-		pageTitle: ('scrumblr - ' + req.params.id)
-	});
+app.use(express.static(uiPath));
+// Handle React routing, return all requests to React app
+app.get('*', function (req, res) {
+	res.sendFile(uiIndexPage);
 });
 
 app.post('/:id/card', async function (req, res) {
@@ -124,8 +124,9 @@ app.post('/:id/card', async function (req, res) {
 /**************
  SOCKET.I0
 **************/
-defaultNamespace.on('connection', function (client) {
-	//santizes text
+defaultNamespace.on('connection', async function (client) {
+	console.log('client connected', client.id)
+
 	function scrub(text) {
 		if (typeof text != "undefined" && text !== null) {
 			//clip the string if it is too long
@@ -140,24 +141,45 @@ defaultNamespace.on('connection', function (client) {
 	}
 
 	client.on('message', function (message) {
+		console.log(message)
 		var clean_data = {};
 		var clean_message = {};
 		var message_out = {};
 
 		if (!message.action) return;
 
-		const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
+		//const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
 		switch (message.action) {
 			case 'initializeMe':
-				initClient(client);
+				initClient(client, message.data.room);
 				break;
-
 			case 'joinRoom':
-				client.join(message.data, (err) => {
-					client.json.send({ action: 'roomAccept', data: '' });
+				// figure out if the user is able to join this room
+				// TODO send username as part of the joinRoom action and set it
+
+				client.join(message.data, async (err) => {
+					// to get initial roommates
+					const roommates = await Object.keys(io.sockets.adapter.rooms[message.data].sockets).map(async (sid) => {
+						if (client.id !== sid)
+							return await getUserName(sid).then((res) => {
+								return { sid: sid, user_name: res ? res : sid }
+							})
+
+					});
+
+					Promise.all(roommates).then((res) => {
+						client.json.send(
+							{
+								action: 'roomAccept',
+								users: res.filter(n => (n != null)),
+								room: message.data
+							}
+						);
+					})
+
 					var msg = {};
 					msg.action = 'join-announce';
-					msg.data = { sid: client.id, user_name: client.user_name };
+					msg.data = { sid: client.id, user_name: client.user_name, room: message.data };
 					client.to(message.data).emit('message', msg)
 				})
 				break;
@@ -171,12 +193,13 @@ defaultNamespace.on('connection', function (client) {
 						position: {
 							left: scrub(message.data.position.left),
 							top: scrub(message.data.position.top)
-						}
+						},
+						room: message.data.room
 					}
 				};
 
-				client.to(room).send(message_out)
-				db.cardSetXY(room, message.data.id, message.data.position.left, message.data.position.top);
+				client.to(message.data.room).send(message_out)
+				db.cardSetXY(message.data.room, message.data.id, message.data.position.left, message.data.position.top);
 				break;
 
 			case 'createCard':
@@ -188,58 +211,62 @@ defaultNamespace.on('connection', function (client) {
 				clean_data.y = scrub(data.y);
 				clean_data.rot = scrub(data.rot);
 				clean_data.colour = scrub(data.colour);
-				createCard(room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
+				clean_data.room = data.room
+				createCard(data.room, clean_data.id, clean_data.text, clean_data.x, clean_data.y, clean_data.rot, clean_data.colour);
 				message_out = {
 					action: 'createCard',
 					data: clean_data
 				};
 
-				client.to(room).emit('message', message_out)
+				client.to(data.room).emit('message', message_out)
 				break;
 
 			case 'editCard':
 				clean_data = {};
 				clean_data.value = scrub(message.data.value);
 				clean_data.id = scrub(message.data.id);
-				db.cardEdit(room, clean_data.id, clean_data.value);
+				db.cardEdit(message.data.room, clean_data.id, clean_data.value);
 				message_out = {
 					action: 'editCard',
-					data: clean_data
+					data: clean_data,
+					room: message.data.room
 				};
 
-				client.to(room).send(message_out)
+				client.to(message.data.room).send(message_out)
 				break;
 
 			case 'deleteCard':
 				clean_message = {
 					action: 'deleteCard',
-					data: { id: scrub(message.data.id) }
+					data: {
+						id: scrub(message.data.id),
+						room: scrub(message.data.room)
+					}
 				};
-				db.deleteCard(room, clean_message.data.id);
-				client.to(room).send(clean_message)
+				db.deleteCard(message.data.room, clean_message.data.id);
+				client.to(clean_message.data.room).send(clean_message)
 				break;
 
 			case 'createColumn':
-				clean_message = { data: scrub(message.data) };
-				db.createColumn(room, clean_message.data, function () { });
-				client.to(room).send(message_out)
+				clean_message = { text: scrub(message.data.text), room: scrub(message.data.room) };
+				db.createColumn(clean_message.room, clean_message.text, function () { });
+				client.to(clean_message.room).send({ action: 'createColumn', data: clean_message })
 				break;
-
 			case 'deleteColumn':
+				const room = scrub(message.data.room)
 				db.deleteColumn(room);
-				client.to(room).send({ action: 'deleteColumn' })
+				client.to(room).send({ action: 'deleteColumn', room: room })
 				break;
-
 			case 'updateColumns':
-				var columns = message.data;
+				var columns = message.data.columns;
 				if (!(columns instanceof Array))
 					break;
 				var clean_columns = [];
 				for (var i in columns) {
 					clean_columns[i] = scrub(columns[i]);
 				}
-				db.setColumns(room, clean_columns);
-				client.to(room).send({ action: 'updateColumns', data: clean_columns })
+				db.setColumns(message.data.room, clean_columns);
+				client.to(message.data.room).send({ action: 'updateColumns', data: clean_columns, room: message.data.room })
 				break;
 
 			case 'changeTheme':
@@ -252,30 +279,44 @@ defaultNamespace.on('connection', function (client) {
 
 			case 'setUserName':
 				clean_message = {};
-				clean_message.data = scrub(message.data);
-				setUserName(client, clean_message.data);
+				clean_message.room = scrub(message.data.room);
+				clean_message.name = scrub(message.data.name)
+				setUserName(client, clean_message.name);
 
-				var msg = {};
-				msg.action = 'nameChangeAnnounce';
-				msg.data = { sid: client.id, user_name: clean_message.data };
-				client.to(room).send(msg)
+
+				Object.keys(client.rooms).filter(r => r.startsWith('/')).forEach(room => {
+					var msg = {};
+					msg.action = 'nameChangeAnnounce';
+					msg.data = { room: clean_message.room, sid: client.id, user_name: clean_message.name };
+					client.to(room).send(msg)
+				})
+
 				break;
 
 			case 'addSticker':
 				var cardId = scrub(message.data.cardId);
 				var stickerId = scrub(message.data.stickerId);
-				db.addSticker(room, cardId, stickerId);
-				client.to(room).send({ action: 'addSticker', data: { cardId: cardId, stickerId: stickerId } });
+				db.addSticker(message.data.room, cardId, stickerId);
+				client.to(message.data.room).send({ action: 'addSticker', data: { cardId: cardId, stickerId: stickerId } });
 				break;
 
 			case 'setBoardSize':
 				var size = {};
 				size.width = scrub(message.data.width);
 				size.height = scrub(message.data.height);
-				db.setBoardSize(room, size);
-				client.to(room).send({ action: 'setBoardSize', data: size });
+				db.setBoardSize(message.data.room, size);
+				client.to(message.data.room).send({ action: 'setBoardSize', data: size, room: message.data.room });
 				break;
-
+			case 'setzIndex':
+				db.cardsetzIndex(message.data.room, message.data.cardId, message.data.zindex)
+				client.to(message.data.room).send({
+					action: 'setzIndex',
+					data: {
+						cardId: message.data.cardId,
+						room: message.data.room,
+						zindex: message.data.zindex
+					}
+				})
 			default:
 				//console.log('unknown action');
 				break;
@@ -301,14 +342,15 @@ const getUserName = async (sid) => {
 	return user_name
 }
 
-async function initClient(client) {
+async function initClient(client, room) {
 	//console.log ('initClient Started');
-	const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
+	//const room = Object.keys(client.rooms).filter(room => room.startsWith('/'))[0]
 	db.getAllCards(room, function (cards) {
 		client.json.send(
 			{
 				action: 'initCards',
-				data: cards
+				cards: cards,
+				room: room
 			}
 		);
 
@@ -318,7 +360,8 @@ async function initClient(client) {
 		client.json.send(
 			{
 				action: 'initColumns',
-				data: columns
+				columns: columns,
+				room: room
 			}
 		);
 	});
@@ -339,37 +382,24 @@ async function initClient(client) {
 			client.json.send(
 				{
 					action: 'setBoardSize',
-					data: size
+					data: size,
+					room: room
 				}
 			);
 		}
 	});
 
-	var roommates = await Object.keys(io.sockets.adapter.rooms[room].sockets).map(async (sid) => {
-		if (client.id !== sid)
-			return await getUserName(sid).then((res) => {
-				return { sid: sid, user_name: res }
-			})
 
-	}).filter(function (n) { return n != null });
-
-	Promise.all(roommates).then((res) => {
-		client.json.send(
-			{
-				action: 'initialUsers',
-				data: res
-			}
-		);
-	})
 }
 
 
 function leaveRoom(client) {
+
 	const referer = client.request.headers.referer.split('/')
 	const room = `/${referer[referer.length - 1]}`
 	var msg = {};
 	msg.action = 'leave-announce';
-	msg.data = { sid: client.id };
+	msg.data = { sid: client.id, room: room };
 	client.to(room).emit('message', msg)
 }
 
