@@ -124,21 +124,22 @@ app.post('/:id/card', async function (req, res) {
 /**************
  SOCKET.I0
 **************/
+function scrub(text) {
+	if (typeof text != "undefined" && text !== null) {
+		//clip the string if it is too long
+		if (text.length > 65535) {
+			text = text.substr(0, 65535);
+		}
+		return sanitizer.sanitize(text);
+	}
+	else {
+		return null;
+	}
+}
+
 defaultNamespace.on('connection', async function (client) {
 	console.log('client connected', client.id)
-
-	function scrub(text) {
-		if (typeof text != "undefined" && text !== null) {
-			//clip the string if it is too long
-			if (text.length > 65535) {
-				text = text.substr(0, 65535);
-			}
-			return sanitizer.sanitize(text);
-		}
-		else {
-			return null;
-		}
-	}
+	io.emit('message', { action: 'connectionReport', users_connected: Object.keys(io.sockets.connected).length })
 
 	client.on('message', async function (message) {
 		console.log(message)
@@ -412,12 +413,18 @@ async function initClient(client, room) {
 
 function leaveRoom(client) {
 	try {
-		const [, r] = client.request.headers.referer.match(/https?:\/\/[\w\.:\d]+\/(\w+)/)
-		const room = `/${r}`
-		var msg = {};
-		msg.action = 'leave-announce';
-		msg.data = { sid: client.id, room: room };
-		client.to(room).emit('message', msg)
+		io.emit('message', { action: 'connectionReport', users_connected: Object.keys(io.sockets.connected).length })
+		let referer
+		if (client.request.headers.referer) {
+			referer = client.request.headers.referer.match(/https?:\/\/[\w\.:\d]+\/(\w+)?/)
+		}
+		if (referer[1]) {
+			const room = `/${referer[1]}`
+			var msg = {};
+			msg.action = 'leave-announce';
+			msg.data = { sid: client.id, room: room };
+			client.to(room).emit('message', msg)
+		}
 	}
 	catch (err) {
 		console.log(err)

@@ -19,6 +19,7 @@ socket.on('disconnect', function () {
 })
 
 socket.on('message', function (msg) {
+    console.log(msg)
     if (msg.action) {
         switch (msg.action) {
             case 'roomAccept':
@@ -94,6 +95,9 @@ socket.on('message', function (msg) {
                 break;
             case 'cardEndEditing':
                 scrumblr.cards[msg.data.cardId].editing = false
+                break;
+            case 'connectionReport':
+                server.connected = msg.users_connected
                 break;
             default:
                 console.log('invalid action: ' + msg.action)

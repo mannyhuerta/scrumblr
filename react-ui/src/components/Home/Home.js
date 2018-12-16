@@ -1,4 +1,5 @@
 import React, { Component } from 'react'
+import { observer } from 'mobx-react';
 import { Redirect, Link } from 'react-router-dom'
 import { RIEInput } from '../REIK'
 import Sticker from '../Sticker/Sticker'
@@ -23,6 +24,7 @@ class Home extends Component {
     }
 
     render() {
+        const { stores: { server } } = this.props
         return this.state.redirect ? <Redirect push to={`/${this.state.value}`} /> : <div>
             <div className='board-outline' width='300px' height='300px'>
                 <div id='board'>
@@ -46,8 +48,10 @@ class Home extends Component {
                             </tr>
                         </tbody>
                     </table>
+
                 </div>
             </div>
+            <div>Users Connected: {server.connected}</div>
             <div className='stickers'>
                 <Sticker color='red' canDrag />
                 <Sticker color='blue' canDrag />
@@ -67,4 +71,4 @@ class Home extends Component {
     }
 }
 
-export default Home
+export default observer(Home);
