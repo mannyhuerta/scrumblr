@@ -97,7 +97,7 @@ class Board extends Component {
 
     render() {
         const boardid = this.props.match.url
-        const scrumblr = this.props.stores.scrumblr
+        const { scrumblr, server } = this.props.stores
         const board = scrumblr.boards[boardid]
         const cards = scrumblr.cards
         const users = scrumblr.users
@@ -107,7 +107,7 @@ class Board extends Component {
         return board ?
             <TransitionGroup>
                 <div className='layoutRoot'>
-                    <div className='github'><a className='github' href={process.env.REACT_APP_GITHUB_URL ? process.env.REACT_APP_GITHUB_URL : 'https://github.com/mannyhuerta/scrumblr'}><img src={github} height="20px" width="20px" />&nbsp;github</a></div>
+                    <div className='github'><a className='github' href={process.env.REACT_APP_GITHUB_URL ? process.env.REACT_APP_GITHUB_URL : 'https://github.com/mannyhuerta/scrumblr'}><img src={github} height="20px" width="20px" />&nbsp;github</a><span style={{ marginLeft: '10px' }}>Global Users: {server.connected}, In Room: {board.users.length + 1} </span></div>
                     <ResizableBox className='board-outline' onResize={this.onResize.bind(this)} onResizeStop={this.handleStop.bind(this)} onResizeStart={this.handleStart.bind(this)} width={parseInt(board.width)} height={parseInt(board.height)}>
                         <div id='board'>
                             <div id='board-doodles' />
@@ -188,7 +188,7 @@ class Board extends Component {
 
                     </div>
                 </div>
-            </TransitionGroup>
+            </TransitionGroup >
             : <div>Waiting on board data..</div>
     }
 }

@@ -23,7 +23,7 @@ class App extends Component {
           <Switch>
             <Route exact path='/'
               render={({ match }) => (
-                <Home />
+                <Home {...this.props} />
               )} />
             <Route path='/:name'
               render={({ match }) => (
