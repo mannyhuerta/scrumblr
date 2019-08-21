@@ -1,8 +1,7 @@
 import React, { Component } from 'react';
 import { Route, Switch } from 'react-router-dom'
 import { observer } from 'mobx-react';
-import { DragDropContextProvider } from 'react-dnd'
-import HTML5Backend from 'react-dnd-html5-backend'
+
 import AdSense from 'react-adsense';
 import Board from './components/Board/Board'
 import Home from './components/Home/Home'
@@ -21,29 +20,29 @@ class App extends Component {
     const { REACT_APP_ADSENSE_SLOT, REACT_APP_ADSENSE_CLIENT } = process.env
     return stores.server.connected ?
       (
-        <DragDropContextProvider backend={HTML5Backend}>
-          <Switch>
-            <Route exact path='/'
-              render={({ match }) => (
-                <div>
-                  <Home {...this.props} />
-                  {REACT_APP_ADSENSE_CLIENT && REACT_APP_ADSENSE_SLOT &&
-                    <AdSense.Google
-                      client={REACT_APP_ADSENSE_CLIENT}
-                      slot={REACT_APP_ADSENSE_SLOT}
-                      style={{ display: 'block' }}
-                      format='auto'
-                      responsive='true'
-                    />
-                  }
-                </div>
-              )} />
-            <Route path='/:name'
-              render={({ match }) => (
-                <Board {...this.props} match={match} />
-              )} />
-          </Switch>
-        </DragDropContextProvider>
+
+        <Switch>
+          <Route exact path='/'
+            render={({ match }) => (
+              <div>
+                <Home {...this.props} />
+                {REACT_APP_ADSENSE_CLIENT && REACT_APP_ADSENSE_SLOT &&
+                  <AdSense.Google
+                    client={REACT_APP_ADSENSE_CLIENT}
+                    slot={REACT_APP_ADSENSE_SLOT}
+                    style={{ display: 'block' }}
+                    format='auto'
+                    responsive='true'
+                  />
+                }
+              </div>
+            )} />
+          <Route path='/:name'
+            render={({ match }) => (
+              <Board {...this.props} match={match} />
+            )} />
+        </Switch>
+
       ) : <div>Connecting to server</div>
   }
 }
